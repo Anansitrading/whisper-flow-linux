@@ -1,0 +1,30 @@
+# WhisperFlow Linux Configuration
+# Copy to ~/.config/whisperflow/config.yaml to customize
+
+# Hotkey: hold to record, release to transcribe
+# Options: super+shift, ctrl+alt, ctrl+shift, etc.
+hotkey: super+shift
+
+# Whisper model: tiny.en, base.en, small.en, medium.en
+model: base.en
+
+# Compute type for CPU inference: int8, float32
+compute_type: int8
+
+# Audio device: "auto" to auto-detect Blue Yeti, or device index number
+audio_device: auto
+
+# Sample rate in Hz (16000 is optimal for Whisper)
+sample_rate: 16000
+
+# Typing delay in ms between characters (prevent dropped chars)
+typing_delay_ms: 10
+
+# Add a space before typed text
+prepend_space: true
+
+# Minimum recording duration in seconds (ignore shorter recordings)
+min_duration: 0.3
+
+# Language for transcription
+language: en
