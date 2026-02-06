@@ -28,7 +28,11 @@ def type_text(text, delay_ms=10, prepend_space=True):
     if prepend_space:
         text = " " + text
 
-    if _is_wayland():
+    if _is_wayland() and _has("xdotool"):
+        # Many Wayland compositors don't support virtual keyboard protocol,
+        # but xdotool still works via XWayland
+        _type_x11(text, delay_ms)
+    elif _is_wayland():
         _type_wayland(text, delay_ms)
     else:
         _type_x11(text, delay_ms)
@@ -79,6 +83,29 @@ def _wayland_clipboard_paste(text):
         )
 
 
+def _is_terminal_focused():
+    """Check if the currently focused window is a terminal emulator."""
+    try:
+        win_id = subprocess.run(
+            ["xdotool", "getactivewindow"],
+            capture_output=True, text=True, timeout=2,
+        ).stdout.strip()
+        result = subprocess.run(
+            ["xprop", "-id", win_id, "WM_CLASS"],
+            capture_output=True, text=True, timeout=2,
+        )
+        wm_class = result.stdout.strip().lower()
+        terminal_keywords = [
+            "terminal", "konsole", "xterm", "urxvt", "alacritty",
+            "kitty", "terminator", "tilix", "sakura", "guake",
+            "tilda", "foot", "wezterm", "hyper", "tabby", "rio",
+            "ghostty", "contour", "lxterminal", "st-256color",
+        ]
+        return any(kw in wm_class for kw in terminal_keywords)
+    except Exception:
+        return False
+
+
 def _type_x11(text, delay_ms):
     """Type on X11 using xdotool."""
     if not _has("xdotool"):
@@ -100,10 +127,17 @@ def _type_x11(text, delay_ms):
             ["xclip", "-selection", "clipboard"],
             input=text, text=True, timeout=2, check=False,
         )
-        subprocess.run(
-            ["xdotool", "key", "--clearmodifiers", "ctrl+v"],
-            check=False, timeout=5,
-        )
+        # Terminals use Ctrl+Shift+V for paste; other apps use Ctrl+V
+        if _is_terminal_focused():
+            subprocess.run(
+                ["xdotool", "key", "--clearmodifiers", "ctrl+shift+v"],
+                check=False, timeout=5,
+            )
+        else:
+            subprocess.run(
+                ["xdotool", "key", "--clearmodifiers", "ctrl+v"],
+                check=False, timeout=5,
+            )
         if old is not None:
             time.sleep(0.1)
             subprocess.run(
