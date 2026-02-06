@@ -4,7 +4,7 @@ import os
 import yaml
 
 DEFAULT_CONFIG = {
-    "hotkey": "super+shift",
+    "hotkey": "ctrl+shift",
     "model": "base.en",
     "compute_type": "int8",
     "audio_device": "auto",

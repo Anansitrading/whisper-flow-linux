@@ -1,90 +1,117 @@
 """Text injection module for WhisperFlow.
 
-Types transcribed text at the current cursor position using xdotool.
-Uses clipboard paste as fallback for Unicode/special characters.
-Works in any X11 application.
+Auto-detects Wayland vs X11 and uses the right tool:
+  - Wayland: wtype (direct) or wl-copy + wtype ctrl+v (clipboard)
+  - X11: xdotool
 """
 
+import os
 import subprocess
 import shutil
+import time
 
 
-def _has_command(cmd):
+def _has(cmd):
     return shutil.which(cmd) is not None
 
 
+def _is_wayland():
+    return os.environ.get("XDG_SESSION_TYPE") == "wayland" or \
+           os.environ.get("WAYLAND_DISPLAY") is not None
+
+
 def type_text(text, delay_ms=10, prepend_space=True):
-    """Type text at the current cursor position.
-
-    Tries xdotool first. Falls back to xclip + Ctrl+V paste
-    for better Unicode and special character support.
-
-    Args:
-        text: The text to type.
-        delay_ms: Delay between keystrokes in milliseconds.
-        prepend_space: Whether to add a leading space.
-    """
+    """Type text at the current cursor position in the focused window."""
     if not text:
         return
 
     if prepend_space:
         text = " " + text
 
-    # Try clipboard paste for reliability with special chars
-    if _has_command("xclip") and _has_command("xdotool"):
-        _type_via_clipboard(text)
-    elif _has_command("xdotool"):
-        _type_via_xdotool(text, delay_ms)
+    if _is_wayland():
+        _type_wayland(text, delay_ms)
     else:
+        _type_x11(text, delay_ms)
+
+
+def _type_wayland(text, delay_ms):
+    """Type on Wayland using wtype or wl-clipboard fallback."""
+    if _has("wl-copy") and _has("wtype"):
+        _wayland_clipboard_paste(text)
+    elif _has("wtype"):
+        subprocess.run(
+            ["wtype", "-d", str(delay_ms), text],
+            check=False, timeout=30,
+        )
+    else:
+        raise RuntimeError(
+            "No Wayland typing tool found. Install wtype: sudo apt install wtype"
+        )
+
+
+def _wayland_clipboard_paste(text):
+    """Paste via Wayland clipboard for best Unicode support."""
+    # Save old clipboard
+    try:
+        old = subprocess.run(
+            ["wl-paste", "--no-newline"],
+            capture_output=True, text=True, timeout=2,
+        ).stdout
+    except Exception:
+        old = None
+
+    # Set clipboard and paste
+    subprocess.run(
+        ["wl-copy", "--", text],
+        check=False, timeout=2,
+    )
+    subprocess.run(
+        ["wtype", "-M", "ctrl", "-P", "v", "-p", "v", "-m", "ctrl"],
+        check=False, timeout=5,
+    )
+
+    # Restore old clipboard
+    if old is not None:
+        time.sleep(0.1)
+        subprocess.run(
+            ["wl-copy", "--", old],
+            check=False, timeout=2,
+        )
+
+
+def _type_x11(text, delay_ms):
+    """Type on X11 using xdotool."""
+    if not _has("xdotool"):
         raise RuntimeError(
             "xdotool not found. Install it: sudo apt install xdotool"
         )
 
+    if _has("xclip"):
+        # Clipboard paste (better Unicode)
+        try:
+            old = subprocess.run(
+                ["xclip", "-selection", "clipboard", "-o"],
+                capture_output=True, text=True, timeout=2,
+            ).stdout
+        except Exception:
+            old = None
 
-def _type_via_clipboard(text):
-    """Paste text via clipboard (handles Unicode reliably)."""
-    # Save current clipboard
-    try:
-        old_clip = subprocess.run(
-            ["xclip", "-selection", "clipboard", "-o"],
-            capture_output=True, text=True, timeout=2,
-        ).stdout
-    except Exception:
-        old_clip = None
-
-    # Set clipboard to our text
-    subprocess.run(
-        ["xclip", "-selection", "clipboard"],
-        input=text, text=True, timeout=2, check=False,
-    )
-
-    # Paste with Ctrl+V
-    subprocess.run(
-        ["xdotool", "key", "--clearmodifiers", "ctrl+v"],
-        check=False, timeout=5,
-    )
-
-    # Restore old clipboard after a brief delay
-    if old_clip is not None:
-        import time
-        time.sleep(0.1)
         subprocess.run(
             ["xclip", "-selection", "clipboard"],
-            input=old_clip, text=True, timeout=2, check=False,
+            input=text, text=True, timeout=2, check=False,
         )
-
-
-def _type_via_xdotool(text, delay_ms):
-    """Type text character by character via xdotool."""
-    subprocess.run(
-        [
-            "xdotool",
-            "type",
-            "--clearmodifiers",
-            "--delay",
-            str(delay_ms),
-            text,
-        ],
-        check=False,
-        timeout=30,
-    )
+        subprocess.run(
+            ["xdotool", "key", "--clearmodifiers", "ctrl+v"],
+            check=False, timeout=5,
+        )
+        if old is not None:
+            time.sleep(0.1)
+            subprocess.run(
+                ["xclip", "-selection", "clipboard"],
+                input=old, text=True, timeout=2, check=False,
+            )
+    else:
+        subprocess.run(
+            ["xdotool", "type", "--clearmodifiers", "--delay", str(delay_ms), text],
+            check=False, timeout=30,
+        )

@@ -2,8 +2,8 @@
 # Copy to ~/.config/whisperflow/config.yaml to customize
 
 # Hotkey: hold to record, release to transcribe
-# Options: super+shift, ctrl+alt, ctrl+shift, etc.
-hotkey: super+shift
+# Options: ctrl+shift, ctrl+alt, super+shift, scrolllock, pause, f9..f12
+hotkey: ctrl+shift
 
 # Whisper model: tiny.en, base.en, small.en, medium.en
 model: base.en

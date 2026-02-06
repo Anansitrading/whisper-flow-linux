@@ -159,6 +159,23 @@ def main():
     )
     args = parser.parse_args()
 
+    # Detect session type for proper typing method
+    import os
+    session_type = os.environ.get("XDG_SESSION_TYPE", "")
+    if not session_type:
+        # Try to detect from loginctl
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["loginctl", "show-session", "", "-p", "Type", "--value"],
+                capture_output=True, text=True, timeout=2,
+            )
+            session_type = result.stdout.strip()
+            if session_type:
+                os.environ["XDG_SESSION_TYPE"] = session_type
+        except Exception:
+            pass
+
     if args.list_devices:
         import sounddevice as sd
         devices = sd.query_devices()
@@ -182,6 +199,26 @@ def main():
         config["audio_device"] = args.device
 
     _log(f"Config: model={config['model']}, hotkey={config['hotkey']}, device={config['audio_device']}")
+
+    # Check input group membership (required for evdev hotkey detection)
+    import grp
+    try:
+        input_members = grp.getgrnam("input").gr_mem
+        import getpass
+        username = getpass.getuser()
+        if username not in input_members:
+            # Also check primary group
+            import os
+            user_gids = os.getgroups()
+            input_gid = grp.getgrnam("input").gr_gid
+            if input_gid not in user_gids:
+                _log("WARNING: You are not in the 'input' group.")
+                _log("  Hotkey detection will not work!")
+                _log("  Fix: sudo usermod -aG input $USER")
+                _log("  Then log out and back in.")
+                sys.exit(1)
+    except KeyError:
+        pass  # No 'input' group on this system
 
     # Handle signals
     app = WhisperFlow(config)
