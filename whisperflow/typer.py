@@ -83,8 +83,8 @@ def _wayland_clipboard_paste(text):
         )
 
 
-def _is_terminal_focused():
-    """Check if the currently focused window is a terminal emulator."""
+def _get_focused_wm_class():
+    """Return the WM_CLASS string of the focused window, or empty string."""
     try:
         win_id = subprocess.run(
             ["xdotool", "getactivewindow"],
@@ -94,16 +94,33 @@ def _is_terminal_focused():
             ["xprop", "-id", win_id, "WM_CLASS"],
             capture_output=True, text=True, timeout=2,
         )
-        wm_class = result.stdout.strip().lower()
-        terminal_keywords = [
-            "terminal", "konsole", "xterm", "urxvt", "alacritty",
-            "kitty", "terminator", "tilix", "sakura", "guake",
-            "tilda", "foot", "wezterm", "hyper", "tabby", "rio",
-            "ghostty", "contour", "lxterminal", "st-256color",
-        ]
-        return any(kw in wm_class for kw in terminal_keywords)
+        return result.stdout.strip().lower()
     except Exception:
-        return False
+        return ""
+
+
+def _is_terminal_focused(wm_class=None):
+    """Check if the currently focused window is a terminal emulator."""
+    if wm_class is None:
+        wm_class = _get_focused_wm_class()
+    terminal_keywords = [
+        "terminal", "konsole", "xterm", "urxvt", "alacritty",
+        "kitty", "terminator", "tilix", "sakura", "guake",
+        "tilda", "foot", "wezterm", "hyper", "tabby", "rio",
+        "ghostty", "contour", "lxterminal", "st-256color",
+    ]
+    return any(kw in wm_class for kw in terminal_keywords)
+
+
+def _is_remote_viewer_focused(wm_class=None):
+    """Check if the focused window is a VNC/RDP viewer where clipboard paste won't work."""
+    if wm_class is None:
+        wm_class = _get_focused_wm_class()
+    remote_keywords = [
+        "vncviewer", "tigervnc", "realvnc", "tightvnc",
+        "remmina", "vinagre", "krdc", "xfreerdp", "rdesktop",
+    ]
+    return any(kw in wm_class for kw in remote_keywords)
 
 
 def _type_x11(text, delay_ms):
@@ -112,6 +129,18 @@ def _type_x11(text, delay_ms):
         raise RuntimeError(
             "xdotool not found. Install it: sudo apt install xdotool"
         )
+
+    wm_class = _get_focused_wm_class()
+
+    # VNC/RDP viewers: clipboard paste won't work (local vs remote clipboard),
+    # so use direct keystroke injection instead
+    if _is_remote_viewer_focused(wm_class):
+        subprocess.run(
+            ["xdotool", "type", "--clearmodifiers", "--delay",
+             str(max(delay_ms, 12)), text],
+            check=False, timeout=30,
+        )
+        return
 
     if _has("xclip"):
         # Clipboard paste (better Unicode)
@@ -128,7 +157,7 @@ def _type_x11(text, delay_ms):
             input=text, text=True, timeout=2, check=False,
         )
         # Terminals use Ctrl+Shift+V for paste; other apps use Ctrl+V
-        if _is_terminal_focused():
+        if _is_terminal_focused(wm_class):
             subprocess.run(
                 ["xdotool", "key", "--clearmodifiers", "ctrl+shift+v"],
                 check=False, timeout=5,
