@@ -1,14 +1,18 @@
 """Text injection module for WhisperFlow.
 
-Auto-detects Wayland vs X11 and uses the right tool:
-  - Wayland: wtype (direct) or wl-copy + wtype ctrl+v (clipboard)
-  - X11: xdotool
+Platform support:
+  - Linux/Wayland: wtype (direct) or wl-copy + wtype ctrl+v (clipboard)
+  - Linux/X11: xdotool + xclip (clipboard paste)
+  - Windows: ctypes SendInput (clipboard paste via Ctrl+V)
 """
 
 import os
+import sys
 import subprocess
 import shutil
 import time
+
+IS_WINDOWS = sys.platform == "win32"
 
 
 def _has(cmd):
@@ -28,15 +32,125 @@ def type_text(text, delay_ms=10, prepend_space=True):
     if prepend_space:
         text = " " + text
 
-    if _is_wayland() and _has("xdotool"):
-        # Many Wayland compositors don't support virtual keyboard protocol,
-        # but xdotool still works via XWayland
+    if IS_WINDOWS:
+        _type_windows(text)
+    elif _is_wayland() and _has("xdotool"):
         _type_x11(text, delay_ms)
     elif _is_wayland():
         _type_wayland(text, delay_ms)
     else:
         _type_x11(text, delay_ms)
 
+
+# ─── Windows ────────────────────────────────────────────────────────────────
+
+def _type_windows(text):
+    """Type on Windows using clipboard paste (Ctrl+V) via ctypes."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+
+    # --- Save old clipboard ---
+    old_clipboard = None
+    CF_UNICODETEXT = 13
+    GMEM_MOVEABLE = 0x0002
+
+    if user32.OpenClipboard(0):
+        h = user32.GetClipboardData(CF_UNICODETEXT)
+        if h:
+            kernel32.GlobalLock.restype = ctypes.c_void_p
+            ptr = kernel32.GlobalLock(h)
+            if ptr:
+                old_clipboard = ctypes.wstring_at(ptr)
+                kernel32.GlobalUnlock(h)
+        user32.CloseClipboard()
+
+    # --- Set new clipboard text ---
+    if user32.OpenClipboard(0):
+        user32.EmptyClipboard()
+        # Encode text as UTF-16LE for Windows clipboard
+        encoded = text.encode("utf-16-le") + b"\x00\x00"
+        h_mem = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(encoded))
+        kernel32.GlobalLock.restype = ctypes.c_void_p
+        ptr = kernel32.GlobalLock(h_mem)
+        ctypes.memmove(ptr, encoded, len(encoded))
+        kernel32.GlobalUnlock(h_mem)
+        user32.SetClipboardData(CF_UNICODETEXT, h_mem)
+        user32.CloseClipboard()
+    else:
+        return
+
+    # --- Send Ctrl+V via SendInput ---
+    time.sleep(0.05)  # Small delay for clipboard to settle
+    _send_ctrl_v()
+
+    # --- Restore old clipboard ---
+    if old_clipboard is not None:
+        time.sleep(0.1)
+        if user32.OpenClipboard(0):
+            user32.EmptyClipboard()
+            encoded = old_clipboard.encode("utf-16-le") + b"\x00\x00"
+            h_mem = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(encoded))
+            kernel32.GlobalLock.restype = ctypes.c_void_p
+            ptr = kernel32.GlobalLock(h_mem)
+            ctypes.memmove(ptr, encoded, len(encoded))
+            kernel32.GlobalUnlock(h_mem)
+            user32.SetClipboardData(CF_UNICODETEXT, h_mem)
+            user32.CloseClipboard()
+
+
+def _send_ctrl_v():
+    """Send Ctrl+V keystroke using SendInput on Windows."""
+    import ctypes
+    from ctypes import wintypes
+
+    INPUT_KEYBOARD = 1
+    KEYEVENTF_KEYUP = 0x0002
+    VK_CONTROL = 0x11
+    VK_V = 0x56
+
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [
+            ("wVk", wintypes.WORD),
+            ("wScan", wintypes.WORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+        ]
+
+    class INPUT(ctypes.Structure):
+        class _INPUT(ctypes.Union):
+            _fields_ = [("ki", KEYBDINPUT)]
+        _fields_ = [
+            ("type", wintypes.DWORD),
+            ("_input", _INPUT),
+        ]
+
+    def _make_key_input(vk, flags=0):
+        inp = INPUT()
+        inp.type = INPUT_KEYBOARD
+        inp._input.ki.wVk = vk
+        inp._input.ki.wScan = 0
+        inp._input.ki.dwFlags = flags
+        inp._input.ki.time = 0
+        inp._input.ki.dwExtraInfo = None
+        return inp
+
+    # Ctrl down, V down, V up, Ctrl up
+    inputs = [
+        _make_key_input(VK_CONTROL),
+        _make_key_input(VK_V),
+        _make_key_input(VK_V, KEYEVENTF_KEYUP),
+        _make_key_input(VK_CONTROL, KEYEVENTF_KEYUP),
+    ]
+
+    arr = (INPUT * len(inputs))(*inputs)
+    ctypes.windll.user32.SendInput(len(inputs), arr, ctypes.sizeof(INPUT))
+
+
+# ─── Linux / Wayland ────────────────────────────────────────────────────────
 
 def _type_wayland(text, delay_ms):
     """Type on Wayland using wtype or wl-clipboard fallback."""
@@ -55,7 +169,6 @@ def _type_wayland(text, delay_ms):
 
 def _wayland_clipboard_paste(text):
     """Paste via Wayland clipboard for best Unicode support."""
-    # Save old clipboard
     try:
         old = subprocess.run(
             ["wl-paste", "--no-newline"],
@@ -64,7 +177,6 @@ def _wayland_clipboard_paste(text):
     except Exception:
         old = None
 
-    # Set clipboard and paste
     subprocess.run(
         ["wl-copy", "--", text],
         check=False, timeout=2,
@@ -74,7 +186,6 @@ def _wayland_clipboard_paste(text):
         check=False, timeout=5,
     )
 
-    # Restore old clipboard
     if old is not None:
         time.sleep(0.1)
         subprocess.run(
@@ -82,6 +193,8 @@ def _wayland_clipboard_paste(text):
             check=False, timeout=2,
         )
 
+
+# ─── Linux / X11 ────────────────────────────────────────────────────────────
 
 def _get_focused_wm_class():
     """Return the WM_CLASS string of the focused window, or empty string."""
@@ -132,8 +245,6 @@ def _type_x11(text, delay_ms):
 
     wm_class = _get_focused_wm_class()
 
-    # VNC/RDP viewers: clipboard paste won't work (local vs remote clipboard),
-    # so use direct keystroke injection instead
     if _is_remote_viewer_focused(wm_class):
         subprocess.run(
             ["xdotool", "type", "--clearmodifiers", "--delay",
@@ -143,7 +254,6 @@ def _type_x11(text, delay_ms):
         return
 
     if _has("xclip"):
-        # Clipboard paste (better Unicode)
         try:
             old = subprocess.run(
                 ["xclip", "-selection", "clipboard", "-o"],
@@ -156,7 +266,6 @@ def _type_x11(text, delay_ms):
             ["xclip", "-selection", "clipboard"],
             input=text, text=True, timeout=2, check=False,
         )
-        # Terminals use Ctrl+Shift+V for paste; other apps use Ctrl+V
         if _is_terminal_focused(wm_class):
             subprocess.run(
                 ["xdotool", "key", "--clearmodifiers", "ctrl+shift+v"],

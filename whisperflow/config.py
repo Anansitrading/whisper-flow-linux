@@ -1,6 +1,7 @@
 """Configuration management for WhisperFlow."""
 
 import os
+import sys
 import yaml
 
 DEFAULT_CONFIG = {
@@ -15,7 +16,11 @@ DEFAULT_CONFIG = {
     "language": "en",
 }
 
-CONFIG_DIR = os.path.expanduser("~/.config/whisperflow")
+if sys.platform == "win32":
+    CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "WhisperFlow")
+else:
+    CONFIG_DIR = os.path.expanduser("~/.config/whisperflow")
+
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.yaml")
 
 

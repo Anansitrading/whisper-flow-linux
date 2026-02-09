@@ -2,8 +2,8 @@ from setuptools import setup, find_packages
 
 setup(
     name="whisperflow",
-    version="1.0.0",
-    description="Local push-to-talk speech-to-text for Linux",
+    version="1.1.0",
+    description="Local push-to-talk speech-to-text for Linux and Windows",
     author="Anansitrading",
     packages=find_packages(),
     python_requires=">=3.10",
@@ -13,6 +13,8 @@ setup(
         "numpy>=1.24.0",
         "pynput>=1.7.6",
         "PyYAML>=6.0",
+        "pystray>=0.19.4",
+        "Pillow>=9.0.0",
     ],
     entry_points={
         "console_scripts": [

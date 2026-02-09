@@ -1,6 +1,7 @@
-"""WhisperFlow Linux - Main entry point.
+"""WhisperFlow - Main entry point.
 
 Push-to-talk speech-to-text that types anywhere your cursor is.
+Works on both Linux and Windows.
 """
 
 import argparse
@@ -15,6 +16,8 @@ from whisperflow.transcriber import Transcriber
 from whisperflow.hotkey import HotkeyListener
 from whisperflow.typer import type_text
 from whisperflow.tray import TrayIcon
+
+IS_WINDOWS = sys.platform == "win32"
 
 
 class WhisperFlow:
@@ -134,11 +137,11 @@ def _log(msg):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="WhisperFlow - Push-to-talk speech-to-text for Linux"
+        description="WhisperFlow - Push-to-talk speech-to-text"
     )
     parser.add_argument(
         "--config", "-c",
-        help="Path to config file (default: ~/.config/whisperflow/config.yaml)",
+        help="Path to config file",
     )
     parser.add_argument(
         "--hotkey",
@@ -159,22 +162,22 @@ def main():
     )
     args = parser.parse_args()
 
-    # Detect session type for proper typing method
-    import os
-    session_type = os.environ.get("XDG_SESSION_TYPE", "")
-    if not session_type:
-        # Try to detect from loginctl
-        try:
-            import subprocess
-            result = subprocess.run(
-                ["loginctl", "show-session", "", "-p", "Type", "--value"],
-                capture_output=True, text=True, timeout=2,
-            )
-            session_type = result.stdout.strip()
-            if session_type:
-                os.environ["XDG_SESSION_TYPE"] = session_type
-        except Exception:
-            pass
+    # Linux: detect session type for proper typing method
+    if not IS_WINDOWS:
+        import os
+        session_type = os.environ.get("XDG_SESSION_TYPE", "")
+        if not session_type:
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ["loginctl", "show-session", "", "-p", "Type", "--value"],
+                    capture_output=True, text=True, timeout=2,
+                )
+                session_type = result.stdout.strip()
+                if session_type:
+                    os.environ["XDG_SESSION_TYPE"] = session_type
+            except Exception:
+                pass
 
     if args.list_devices:
         import sounddevice as sd
@@ -200,25 +203,25 @@ def main():
 
     _log(f"Config: model={config['model']}, hotkey={config['hotkey']}, device={config['audio_device']}")
 
-    # Check input group membership (required for evdev hotkey detection)
-    import grp
-    try:
-        input_members = grp.getgrnam("input").gr_mem
-        import getpass
-        username = getpass.getuser()
-        if username not in input_members:
-            # Also check primary group
-            import os
-            user_gids = os.getgroups()
-            input_gid = grp.getgrnam("input").gr_gid
-            if input_gid not in user_gids:
-                _log("WARNING: You are not in the 'input' group.")
-                _log("  Hotkey detection will not work!")
-                _log("  Fix: sudo usermod -aG input $USER")
-                _log("  Then log out and back in.")
-                sys.exit(1)
-    except KeyError:
-        pass  # No 'input' group on this system
+    # Linux: check input group membership (required for evdev hotkey detection)
+    if not IS_WINDOWS:
+        import grp
+        try:
+            input_members = grp.getgrnam("input").gr_mem
+            import getpass
+            username = getpass.getuser()
+            if username not in input_members:
+                import os
+                user_gids = os.getgroups()
+                input_gid = grp.getgrnam("input").gr_gid
+                if input_gid not in user_gids:
+                    _log("WARNING: You are not in the 'input' group.")
+                    _log("  Hotkey detection will not work!")
+                    _log("  Fix: sudo usermod -aG input $USER")
+                    _log("  Then log out and back in.")
+                    sys.exit(1)
+        except KeyError:
+            pass  # No 'input' group on this system
 
     # Handle signals
     app = WhisperFlow(config)
