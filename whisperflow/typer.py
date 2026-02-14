@@ -52,15 +52,42 @@ def _type_windows(text):
     user32 = ctypes.windll.user32
     kernel32 = ctypes.windll.kernel32
 
-    # --- Save old clipboard ---
-    old_clipboard = None
     CF_UNICODETEXT = 13
     GMEM_MOVEABLE = 0x0002
 
+    # Set proper return/argument types for 64-bit correctness.
+    # Without this, ctypes defaults to c_int (32-bit) which truncates
+    # 64-bit handles and pointers, causing access violations.
+    kernel32.GlobalAlloc.restype = ctypes.c_void_p
+    kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    user32.GetClipboardData.restype = ctypes.c_void_p
+    user32.GetClipboardData.argtypes = [wintypes.UINT]
+    user32.SetClipboardData.restype = ctypes.c_void_p
+    user32.SetClipboardData.argtypes = [wintypes.UINT, ctypes.c_void_p]
+
+    def _set_clipboard_text(txt):
+        """Encode text and place it on the already-opened clipboard."""
+        user32.EmptyClipboard()
+        encoded = txt.encode("utf-16-le") + b"\x00\x00"
+        h_mem = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(encoded))
+        if not h_mem:
+            return False
+        ptr = kernel32.GlobalLock(h_mem)
+        if not ptr:
+            return False
+        ctypes.memmove(ptr, encoded, len(encoded))
+        kernel32.GlobalUnlock(h_mem)
+        user32.SetClipboardData(CF_UNICODETEXT, h_mem)
+        return True
+
+    # --- Save old clipboard ---
+    old_clipboard = None
     if user32.OpenClipboard(0):
         h = user32.GetClipboardData(CF_UNICODETEXT)
         if h:
-            kernel32.GlobalLock.restype = ctypes.c_void_p
             ptr = kernel32.GlobalLock(h)
             if ptr:
                 old_clipboard = ctypes.wstring_at(ptr)
@@ -69,16 +96,10 @@ def _type_windows(text):
 
     # --- Set new clipboard text ---
     if user32.OpenClipboard(0):
-        user32.EmptyClipboard()
-        # Encode text as UTF-16LE for Windows clipboard
-        encoded = text.encode("utf-16-le") + b"\x00\x00"
-        h_mem = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(encoded))
-        kernel32.GlobalLock.restype = ctypes.c_void_p
-        ptr = kernel32.GlobalLock(h_mem)
-        ctypes.memmove(ptr, encoded, len(encoded))
-        kernel32.GlobalUnlock(h_mem)
-        user32.SetClipboardData(CF_UNICODETEXT, h_mem)
+        ok = _set_clipboard_text(text)
         user32.CloseClipboard()
+        if not ok:
+            return
     else:
         return
 
@@ -90,14 +111,7 @@ def _type_windows(text):
     if old_clipboard is not None:
         time.sleep(0.1)
         if user32.OpenClipboard(0):
-            user32.EmptyClipboard()
-            encoded = old_clipboard.encode("utf-16-le") + b"\x00\x00"
-            h_mem = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(encoded))
-            kernel32.GlobalLock.restype = ctypes.c_void_p
-            ptr = kernel32.GlobalLock(h_mem)
-            ctypes.memmove(ptr, encoded, len(encoded))
-            kernel32.GlobalUnlock(h_mem)
-            user32.SetClipboardData(CF_UNICODETEXT, h_mem)
+            _set_clipboard_text(old_clipboard)
             user32.CloseClipboard()
 
 
@@ -111,18 +125,42 @@ def _send_ctrl_v():
     VK_CONTROL = 0x11
     VK_V = 0x56
 
+    # ULONG_PTR is pointer-sized unsigned int (8 bytes on 64-bit Windows)
+    ULONG_PTR = ctypes.POINTER(ctypes.c_ulong)
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [
+            ("dx", wintypes.LONG),
+            ("dy", wintypes.LONG),
+            ("mouseData", wintypes.DWORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", ULONG_PTR),
+        ]
+
     class KEYBDINPUT(ctypes.Structure):
         _fields_ = [
             ("wVk", wintypes.WORD),
             ("wScan", wintypes.WORD),
             ("dwFlags", wintypes.DWORD),
             ("time", wintypes.DWORD),
-            ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+            ("dwExtraInfo", ULONG_PTR),
+        ]
+
+    class HARDWAREINPUT(ctypes.Structure):
+        _fields_ = [
+            ("uMsg", wintypes.DWORD),
+            ("wParamL", wintypes.WORD),
+            ("wParamH", wintypes.WORD),
         ]
 
     class INPUT(ctypes.Structure):
         class _INPUT(ctypes.Union):
-            _fields_ = [("ki", KEYBDINPUT)]
+            _fields_ = [
+                ("ki", KEYBDINPUT),
+                ("mi", MOUSEINPUT),
+                ("hi", HARDWAREINPUT),
+            ]
         _fields_ = [
             ("type", wintypes.DWORD),
             ("_input", _INPUT),
